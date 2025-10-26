@@ -1190,18 +1190,11 @@ class DeepFaceGUI(QMainWindow):
 
                 # User (if available)
                 user_id = analysis.get('user_id')
-                user_name = "Unknown"
-                if user_id:
-                    # Try to get user name from database
-                    try:
-                        with sqlite3.connect(self.database.db_path) as conn:
-                            cursor = conn.cursor()
-                            cursor.execute('SELECT name FROM users WHERE id = ?', (user_id,))
-                            user_row = cursor.fetchone()
-                            if user_row:
-                                user_name = user_row[0]
-                    except:
-                        user_name = f"User {user_id}"
+                user_name = analysis.get('user_name', 'Anonymous')
+
+                # Handle case where user_name is None or 'None' string (fallback)
+                if not user_name or user_name == 'None' or user_name is None:
+                    user_name = f"User {user_id}" if user_id else "Anonymous"
 
                 self.search_results_table.setItem(row, 3, QTableWidgetItem(user_name))
 
@@ -1212,10 +1205,27 @@ class DeepFaceGUI(QMainWindow):
             self.display_similar_faces_visually(similar_faces)
 
             # Update results info
-            self.search_results_info.setText(
-                f"Found {len(similar_faces)} similar faces (threshold: {threshold}, max results: {max_results})"
-            )
-            self.search_results_info.setStyleSheet("QLabel { color: #27AE60; font-weight: bold; }")
+            if len(similar_faces) > 0:
+                best_similarity = similar_faces[0]['similarity']
+                best_pct = best_similarity * 100
+
+                if best_pct >= 80:
+                    status_icon = "🎉"
+                    status_color = "#27AE60"
+                elif best_pct >= 60:
+                    status_icon = "👍"
+                    status_color = "#F39C12"
+                else:
+                    status_icon = "🤔"
+                    status_color = "#E74C3C"
+
+                self.search_results_info.setText(
+                    f"{status_icon} Found {len(similar_faces)} similar faces! Best match: {best_pct:.1f}% (threshold: {threshold})"
+                )
+                self.search_results_info.setStyleSheet(f"QLabel {{ color: {status_color}; font-weight: bold; }}")
+            else:
+                self.search_results_info.setText(f"No similar faces found (threshold: {threshold})")
+                self.search_results_info.setStyleSheet("QLabel { color: #95A5A6; font-style: italic; }")
 
             # Resize columns for better display
             self.search_results_table.resizeColumnsToContents()
@@ -1226,7 +1236,7 @@ class DeepFaceGUI(QMainWindow):
             QMessageBox.warning(self, "Error", f"Search failed: {str(e)}")
 
     def display_similar_faces_visually(self, similar_faces):
-        """Display similar faces visually in the scroll area"""
+        """Display similar faces visually in comparison format with search image"""
         try:
             # Clear existing similar faces
             for i in reversed(range(self.similar_faces_layout.count())):
@@ -1241,32 +1251,153 @@ class DeepFaceGUI(QMainWindow):
                 self.similar_faces_layout.addWidget(no_results_label)
                 return
 
-            # Create horizontal layout for faces
-            faces_layout = QHBoxLayout()
-            faces_layout.setSpacing(10)
+            # Create main comparison layout
+            main_layout = QVBoxLayout()
+            main_layout.setSpacing(15)
 
-            for result in similar_faces:
+            # Add comparison header
+            comparison_header = QLabel("🔍 Search Results Comparison")
+            comparison_header.setStyleSheet("QLabel { font-size: 16px; font-weight: bold; color: #2E86AB; text-align: center; padding: 10px; }")
+            comparison_header.setAlignment(Qt.AlignCenter)
+            main_layout.addWidget(comparison_header)
+
+            # Create horizontal layout for search image vs matches
+            comparison_layout = QHBoxLayout()
+            comparison_layout.setSpacing(20)
+
+            # Left side: Search image display
+            search_section = QVBoxLayout()
+
+            search_title = QLabel("🔎 Search Image")
+            search_title.setStyleSheet("QLabel { font-size: 14px; font-weight: bold; color: #E74C3C; text-align: center; }")
+            search_section.addWidget(search_title)
+
+            # Show the search image (reuse the existing search image display)
+            if hasattr(self, 'search_image_path') and self.search_image_path:
+                search_image_label = QLabel()
+                search_image_label.setAlignment(Qt.AlignCenter)
+                search_image_label.setMinimumSize(200, 200)
+                search_image_label.setMaximumSize(250, 250)
+                search_image_label.setStyleSheet("""
+                    QLabel {
+                        background-color: #F8F9FA;
+                        border: 2px solid #E74C3C;
+                        border-radius: 10px;
+                    }
+                """)
+
+                try:
+                    pixmap = QPixmap(self.search_image_path)
+                    if not pixmap.isNull():
+                        scaled_pixmap = pixmap.scaled(240, 240, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                        search_image_label.setPixmap(scaled_pixmap)
+                    else:
+                        search_image_label.setText("❌\nSearch\nImage")
+                        search_image_label.setStyleSheet("""
+                            QLabel {
+                                background-color: #FFE6E6;
+                                border: 2px solid #E74C3C;
+                                border-radius: 10px;
+                                color: #E74C3C;
+                                font-size: 12px;
+                                text-align: center;
+                            }
+                        """)
+                except Exception:
+                    search_image_label.setText("⚠️\nError")
+                    search_image_label.setStyleSheet("""
+                        QLabel {
+                            background-color: #FFF5E6;
+                            border: 2px solid #F39C12;
+                            border-radius: 10px;
+                            color: #F39C12;
+                            font-size: 12px;
+                            text-align: center;
+                        }
+                    """)
+
+                search_section.addWidget(search_image_label)
+            else:
+                no_search_label = QLabel("No search image selected")
+                no_search_label.setStyleSheet("QLabel { color: #95A5A6; font-style: italic; text-align: center; padding: 20px; }")
+                no_search_label.setAlignment(Qt.AlignCenter)
+                search_section.addWidget(no_search_label)
+
+            search_section.addStretch()
+            comparison_layout.addLayout(search_section)
+
+            # Right side: Matched faces display
+            matches_section = QVBoxLayout()
+
+            matches_title = QLabel(f"🎯 Top {min(len(similar_faces), 5)} Matches")
+            matches_title.setStyleSheet("QLabel { font-size: 14px; font-weight: bold; color: #27AE60; text-align: center; }")
+            matches_section.addWidget(matches_title)
+
+            # Create grid layout for matched faces (max 5 for better display)
+            matches_grid = QGridLayout()
+            matches_grid.setSpacing(10)
+
+            max_display = min(len(similar_faces), 5)  # Show max 5 matches for clean display
+
+            for i in range(max_display):
+                result = similar_faces[i]
                 analysis = result['analysis']
                 similarity = result['similarity']
 
-                # Create face card
-                face_card = self.create_search_result_card(analysis, similarity)
-                faces_layout.addWidget(face_card)
+                # Create match card with similarity info
+                match_card = self.create_comparison_match_card(analysis, similarity, i + 1)
+                matches_grid.addWidget(match_card, i // 2, i % 2)  # 2 columns
 
-            # Add stretch to push faces to the left
-            faces_layout.addStretch()
+            # Fill remaining grid spaces if needed
+            for i in range(max_display, 4):  # Fill up to 4 slots (2x2 grid)
+                empty_label = QLabel("")
+                empty_label.setMinimumSize(180, 220)
+                matches_grid.addWidget(empty_label, i // 2, i % 2)
 
-            self.similar_faces_layout.addLayout(faces_layout)
+            matches_section.addLayout(matches_grid)
+
+            # Add summary info
+            if len(similar_faces) > 5:
+                summary_label = QLabel(f"... and {len(similar_faces) - 5} more matches (see table below)")
+                summary_label.setStyleSheet("QLabel { color: #7F8C8D; font-style: italic; text-align: center; padding: 5px; }")
+                summary_label.setAlignment(Qt.AlignCenter)
+                matches_section.addWidget(summary_label)
+
+            matches_section.addStretch()
+            comparison_layout.addLayout(matches_section)
+
+            main_layout.addLayout(comparison_layout)
+
+            # Add overall similarity info
+            best_similarity = similar_faces[0]['similarity'] if similar_faces else 0
+            best_pct = best_similarity * 100
+
+            if best_pct >= 80:
+                similarity_status = "🎉 Excellent match found!"
+                status_color = "#27AE60"
+            elif best_pct >= 60:
+                similarity_status = "👍 Good potential matches"
+                status_color = "#F39C12"
+            else:
+                similarity_status = "🤔 Limited similarity found"
+                status_color = "#E74C3C"
+
+            overall_info = QLabel(f"{similarity_status} (Best match: {best_pct:.1f}%)")
+            overall_info.setStyleSheet(f"QLabel {{ font-size: 12px; font-weight: bold; color: {status_color}; text-align: center; padding: 10px; }}")
+            overall_info.setAlignment(Qt.AlignCenter)
+            main_layout.addWidget(overall_info)
+
+            self.similar_faces_layout.addLayout(main_layout)
 
         except Exception as e:
-            error_label = QLabel(f"Error displaying faces: {str(e)}")
+            error_label = QLabel(f"Error displaying comparison: {str(e)}")
             error_label.setStyleSheet("QLabel { color: #E74C3C; font-weight: bold; text-align: center; padding: 20px; }")
             error_label.setAlignment(Qt.AlignCenter)
             self.similar_faces_layout.addWidget(error_label)
             print(f"Error displaying similar faces visually: {e}")
 
-    def create_search_result_card(self, analysis, similarity):
-        """Create a card for displaying a search result face"""
+    def create_comparison_match_card(self, analysis, similarity, rank):
+        """Create a comparison card showing matched face with rank and similarity"""
         # Main card widget
         card = QFrame()
         card.setFrameStyle(QFrame.Box)
@@ -1290,23 +1421,28 @@ class DeepFaceGUI(QMainWindow):
         card_layout.setSpacing(3)
         card_layout.setContentsMargins(5, 5, 5, 5)
 
-        # Similarity score at top
+        # Rank and similarity at top
         similarity_pct = similarity * 100
-        similarity_label = QLabel(f"{similarity_pct:.1f}%")
+        header_text = f"#{rank} - {similarity_pct:.1f}%"
+
         if similarity_pct >= 80:
-            similarity_label.setStyleSheet("QLabel { font-size: 12px; font-weight: bold; color: #27AE60; text-align: center; }")
+            header_color = "#27AE60"
         elif similarity_pct >= 60:
-            similarity_label.setStyleSheet("QLabel { font-size: 12px; font-weight: bold; color: #F39C12; text-align: center; }")
+            header_color = "#F39C12"
         else:
-            similarity_label.setStyleSheet("QLabel { font-size: 12px; font-weight: bold; color: #E74C3C; text-align: center; }")
-        card_layout.addWidget(similarity_label)
+            header_color = "#E74C3C"
+
+        header_label = QLabel(header_text)
+        header_label.setStyleSheet(f"QLabel {{ font-size: 11px; font-weight: bold; color: {header_color}; text-align: center; }}")
+        header_label.setAlignment(Qt.AlignCenter)
+        card_layout.addWidget(header_label)
 
         # Image display
         image_path = analysis.get('image_path', '')
         image_label = QLabel()
         image_label.setAlignment(Qt.AlignCenter)
-        image_label.setMinimumSize(150, 150)
-        image_label.setMaximumSize(150, 150)
+        image_label.setMinimumSize(140, 140)
+        image_label.setMaximumSize(140, 140)
         image_label.setStyleSheet("""
             QLabel {
                 background-color: #FFFFFF;
@@ -1317,18 +1453,31 @@ class DeepFaceGUI(QMainWindow):
 
         # Load and display image
         try:
-            pixmap = QPixmap(image_path)
-            if not pixmap.isNull():
-                scaled_pixmap = pixmap.scaled(140, 140, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                image_label.setPixmap(scaled_pixmap)
+            if image_path and os.path.exists(image_path):
+                pixmap = QPixmap(image_path)
+                if not pixmap.isNull():
+                    scaled_pixmap = pixmap.scaled(130, 130, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    image_label.setPixmap(scaled_pixmap)
+                else:
+                    image_label.setText("❌\nInvalid")
+                    image_label.setStyleSheet("""
+                        QLabel {
+                            background-color: #FFE6E6;
+                            border: 1px solid #E74C3C;
+                            border-radius: 5px;
+                            color: #E74C3C;
+                            font-size: 10px;
+                            text-align: center;
+                        }
+                    """)
             else:
-                image_label.setText("❌\nInvalid")
+                image_label.setText("📁\nNo\nImage")
                 image_label.setStyleSheet("""
                     QLabel {
-                        background-color: #FFE6E6;
-                        border: 1px solid #E74C3C;
+                        background-color: #FFF3CD;
+                        border: 1px solid #FFC107;
                         border-radius: 5px;
-                        color: #E74C3C;
+                        color: #856404;
                         font-size: 10px;
                         text-align: center;
                     }
@@ -1351,7 +1500,7 @@ class DeepFaceGUI(QMainWindow):
         # Face info
         info_text = QTextEdit()
         info_text.setReadOnly(True)
-        info_text.setMaximumHeight(40)
+        info_text.setMaximumHeight(35)
         info_text.setStyleSheet("""
             QTextEdit {
                 background-color: transparent;
@@ -1363,17 +1512,11 @@ class DeepFaceGUI(QMainWindow):
 
         # Format face info
         user_id = analysis.get('user_id')
-        user_name = "Unknown"
-        if user_id:
-            try:
-                with sqlite3.connect(self.database.db_path) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute('SELECT name FROM users WHERE id = ?', (user_id,))
-                    user_row = cursor.fetchone()
-                    if user_row:
-                        user_name = user_row[0]
-            except:
-                user_name = f"User {user_id}"
+        user_name = analysis.get('user_name', 'Anonymous')
+
+        # Handle case where user_name is None or 'None' string (fallback)
+        if not user_name or user_name == 'None' or user_name is None:
+            user_name = f"User {user_id}" if user_id else "Anonymous"
 
         info_text.append(f"👤 {user_name}")
         info_text.append(f"📅 {analysis.get('created_at', 'Unknown')}")
@@ -1382,12 +1525,11 @@ class DeepFaceGUI(QMainWindow):
 
         # Click handler
         def on_card_clicked():
-            self.view_search_result_details_from_card(result)
+            self.view_search_result_details_from_card({'analysis': analysis, 'similarity': similarity})
 
         card.mousePressEvent = lambda event: on_card_clicked()
 
-        # Store result data for later use
-        card.setProperty("result_data", {'analysis': analysis, 'similarity': similarity})
+        return card
 
     def view_search_result_details(self, index):
         """Handle double-click on search results table to show details"""

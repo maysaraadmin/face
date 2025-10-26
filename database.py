@@ -257,16 +257,24 @@ class FaceDatabase:
             return results
 
     def get_analysis_by_id(self, analysis_id: int) -> Optional[Dict[str, Any]]:
-        """Get analysis by ID"""
+        """Get analysis by ID with user information"""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute('SELECT * FROM face_analyses WHERE id = ?', (analysis_id,))
+            cursor.execute('''
+                SELECT fa.*, COALESCE(u.name, 'Anonymous') as user_name, u.email as user_email
+                FROM face_analyses fa
+                LEFT JOIN users u ON fa.user_id = u.id
+                WHERE fa.id = ?
+            ''', (analysis_id,))
 
             row = cursor.fetchone()
             if row:
                 result = dict(row)
                 result['result_data'] = json.loads(result['result_data'])
+                # Ensure user_name is never None or 'None' string
+                if not result.get('user_name') or result['user_name'] == 'None':
+                    result['user_name'] = 'Anonymous'
                 return result
             return None
 
@@ -327,11 +335,17 @@ class FaceDatabase:
                     analysis_id = row['analysis_id']
                     analysis = self.get_analysis_by_id(analysis_id)
                     if analysis:
-                        results.append({
-                            'analysis': analysis,
-                            'embedding': stored_embedding,
-                            'similarity': float(similarity)
-                        })
+                        # Check if image file exists
+                        image_path = analysis.get('image_path', '')
+                        if image_path and os.path.exists(image_path):
+                            results.append({
+                                'analysis': analysis,
+                                'embedding': stored_embedding,
+                                'similarity': float(similarity)
+                            })
+                        else:
+                            # Skip results where image files don't exist
+                            pass
 
             # Sort by similarity (highest first)
             results.sort(key=lambda x: x['similarity'], reverse=True)
@@ -430,7 +444,7 @@ class FaceDatabase:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT fa.*, u.name as user_name, u.email as user_email
+                SELECT fa.*, COALESCE(u.name, 'Anonymous') as user_name, u.email as user_email
                 FROM face_analyses fa
                 LEFT JOIN users u ON fa.user_id = u.id
                 ORDER BY fa.created_at DESC
