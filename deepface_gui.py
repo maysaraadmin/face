@@ -3,6 +3,20 @@
 # Suppress ALL TensorFlow warnings BEFORE any imports
 import os
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
+# Try to import Google Lens, but make it optional
+try:
+    print("Attempting to import googlelens...")
+    import sys
+    print("Python path:", sys.path)
+    from googlelens import GoogleLens
+    print("Successfully imported googlelens")
+    HAS_GOOGLE_LENS = True
+except ImportError as e:
+    HAS_GOOGLE_LENS = False
+    print(f"Error importing googlelens: {e}")
+    print("Note: Google Lens module not found. Google Lens search will be disabled.")
+    print("To enable it, install with: pip install git+https://github.com/krishna2206/google-lens-python.git")
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress INFO, WARNING, and ERROR
 os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 os.environ['TF_ENABLE_GPU_GARBAGE_COLLECTION'] = 'false'
@@ -32,10 +46,10 @@ logging.getLogger('tensorflow.core.util.port').setLevel(logging.FATAL)
 
 import sys
 import contextlib
+import io
 import json
 import numpy as np
 from datetime import datetime
-import sqlite3
 import webbrowser
 import urllib.request
 from selenium import webdriver
@@ -48,34 +62,33 @@ from webdriver_manager.chrome import ChromeDriverManager
 # Import PyQt5 components
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                             QPushButton, QLabel, QFileDialog, QTextEdit, QComboBox, QMessageBox,
-                            QProgressBar, QFrame, QGroupBox, QSplitter, QInputDialog, QMenuBar, QMenu, QAction,
-                            QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView, QDialog, QDialogButtonBox,
-                            QScrollArea, QGridLayout, QFormLayout, QLineEdit)
-from PyQt5.QtGui import QPixmap, QImage, QTextDocument, QTextCursor, QFont, QTextCharFormat, QColor
-from PyQt5.QtCore import Qt, QTimer
+                            QProgressBar, QFrame, QGroupBox, QSplitter, QInputDialog,
+                            QTabWidget, QTableWidget, QTableWidgetItem, QDialog,
+                            QScrollArea, QGridLayout, QAction, QLineEdit, QToolBar)
+from PyQt5.QtGui import QPixmap, QFont, QTextCharFormat, QColor, QIcon
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QUrl
+
+# Try to import WebEngine for in-app browsing
+try:
+    from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEnginePage
+    from PyQt5.QtWebEngine import QtWebEngine
+    HAS_WEBENGINE = True
+    print("✅ WebEngine available for in-app browsing")
+except ImportError:
+    HAS_WEBENGINE = False
+    print("⚠️ WebEngine not available - install with: pip install PyQtWebEngine")
+    # Fallback imports if WebEngine not available
+    QWebEngineView = None
+    QWebEnginePage = None
+    QtWebEngine = None
 
 # Import TensorFlow and DeepFace after setting environment variables
-import tensorflow as tf
-
 # Suppress TensorFlow logging after import
-tf_logger = logging.getLogger('tensorflow')
-tf_logger.setLevel(logging.FATAL)
-tf_logger.propagate = False
+logging.getLogger('tensorflow').setLevel(logging.FATAL)
+logging.getLogger('tensorflow').propagate = False
 
-# Redirect stderr during DeepFace import to suppress any remaining warnings
-class SuppressStderr:
-    def __enter__(self):
-        self.stderr = os.dup(2)
-        os.close(2)
-        os.open(os.devnull, os.O_WRONLY)
-        return self
-
-    def __exit__(self, *args):
-        os.close(2)
-        os.dup2(self.stderr, 2)
-
-with SuppressStderr():
-    from deepface import DeepFace
+# Import DeepFace (warnings will be minimal due to environment variables)
+from deepface import DeepFace
 
 # Import database functionality
 from database import FaceDatabase
@@ -83,6 +96,110 @@ from database import FaceDatabase
 print("DeepFace GUI starting without warnings...")
 
 class DeepFaceGUI(QMainWindow):
+    def is_widget_valid(self, widget):
+        """Safely check if a Qt widget is still valid and not deleted"""
+        try:
+            # Check if the widget exists and is not being destroyed
+            if widget is None or not hasattr(widget, 'isVisible'):
+                return False
+            # Try to access a property to see if the C++ object is still valid
+            widget.isVisible()
+            return True
+        except RuntimeError as e:
+            if 'wrapped C/C++ object' in str(e):
+                return False
+            return True  # Other errors might be recoverable
+        except Exception:
+            return False
+
+    class SearchWorker(QThread):
+        finished = pyqtSignal(dict)
+        
+        def __init__(self, image_path, timeout_seconds=60):
+            super().__init__()
+            self.image_path = image_path
+            self.timeout_seconds = timeout_seconds
+            
+        def run(self):
+            try:
+                print("🔍 SearchWorker: Starting GoogleLens search...")
+                print(f"Image path: {self.image_path}")
+
+                # Check if image file exists
+                if not os.path.exists(self.image_path):
+                    raise Exception(f"Image file not found: {self.image_path}")
+
+                # Create GoogleLens instance with error handling
+                try:
+                    gl = GoogleLens()
+                    print("✅ GoogleLens instance created successfully")
+
+                    # Check available methods
+                    available_methods = [method for method in dir(gl) if not method.startswith('_') and callable(getattr(gl, method))]
+                    print(f"Available methods: {available_methods}")
+
+                except Exception as e:
+                    print(f"❌ Failed to create GoogleLens instance: {e}")
+                    raise Exception(f"GoogleLens initialization failed: {e}")
+
+                # Try to use GoogleLens with correct method names
+                results = []
+
+                # Try search_by_file method (correct API)
+                if hasattr(gl, 'search_by_file'):
+                    print("🔄 Trying search_by_file method...")
+                    try:
+                        results = gl.search_by_file(self.image_path)
+                        print(f"✅ search_by_file method succeeded, got {len(results)} results")
+                    except Exception as e:
+                        print(f"❌ search_by_file method failed: {e}")
+                        # Try search_by_url as fallback (less likely to work without URL)
+                        if hasattr(gl, 'search_by_url'):
+                            print("🔄 Trying search_by_url method as fallback...")
+                            try:
+                                # Convert file path to file URL
+                                from urllib.parse import urljoin
+                                from urllib.request import pathname2url
+                                file_url = urljoin('file:', pathname2url(os.path.abspath(self.image_path)))
+                                results = gl.search_by_url(file_url)
+                                print(f"✅ search_by_url method succeeded, got {len(results)} results")
+                            except Exception as e2:
+                                print(f"❌ search_by_url method also failed: {e2}")
+                                raise Exception(f"Both search_by_file and search_by_url methods failed: {e2}")
+                        else:
+                            raise Exception(f"search_by_file method failed and no search_by_url method available: {e}")
+                elif hasattr(gl, 'search_by_url'):
+                    print("🔄 Trying search_by_url method...")
+                    try:
+                        # Convert file path to file URL
+                        from urllib.parse import urljoin
+                        from urllib.request import pathname2url
+                        file_url = urljoin('file:', pathname2url(os.path.abspath(self.image_path)))
+                        results = gl.search_by_url(file_url)
+                        print(f"✅ search_by_url method succeeded, got {len(results)} results")
+                    except Exception as e:
+                        print(f"❌ search_by_url method failed: {e}")
+                        raise Exception(f"search_by_url method failed: {e}")
+                else:
+                    # No usable methods found
+                    available_methods = [method for method in dir(gl) if not method.startswith('_')]
+                    raise Exception(f"No usable methods found. Available methods: {available_methods}. Expected: search_by_file or search_by_url")
+
+                # Validate results
+                if not results:
+                    print("⚠️ GoogleLens returned empty results")
+                    results = []
+
+                print(f"📊 Final results: {len(results)} items")
+                self.finished.emit({"success": True, "data": results})
+
+            except Exception as e:
+                error_msg = f"GoogleLens search failed: {str(e)}"
+                print(f"❌ {error_msg}")
+                import traceback
+                traceback.print_exc()
+                self.finished.emit({"success": False, "error": error_msg})
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle('DeepFace GUI - Enhanced Face Analysis with Database')
@@ -984,8 +1101,159 @@ class DeepFaceGUI(QMainWindow):
 
         self.main_tab_widget.addTab(self.create_internet_search_tab(), "🌐 Internet Search")
 
-    def create_internet_search_tab(self):
+        # Web browser tab (with WebEngine)
+        if HAS_WEBENGINE:
+            self.main_tab_widget.addTab(self.create_web_browser_tab(), "🌐 Web Browser")
+            print("✅ Web Browser tab added")
+        else:
+            # Add a placeholder tab if WebEngine not available
+            web_placeholder = QWidget()
+            web_layout = QVBoxLayout(web_placeholder)
+            web_layout.addWidget(QLabel("🌐 Web Browser requires PyQtWebEngine"))
+            web_layout.addWidget(QLabel("Install with: pip install PyQtWebEngine"))
+            self.main_tab_widget.addTab(web_placeholder, "🌐 Web Browser")
+            print("⚠️ WebEngine not available - showing placeholder")
 
+    def create_web_browser_tab(self):
+        """Create the web browser tab with WebEngine"""
+        web_widget = QWidget()
+        web_layout = QVBoxLayout(web_widget)
+
+        # Navigation bar
+        nav_layout = QHBoxLayout()
+
+        # Back button
+        back_btn = QPushButton("⬅️ Back")
+        back_btn.setStyleSheet("QPushButton { padding: 5px; border-radius: 3px; }")
+        back_btn.clicked.connect(self.web_back)
+        nav_layout.addWidget(back_btn)
+
+        # Forward button
+        forward_btn = QPushButton("➡️ Forward")
+        forward_btn.setStyleSheet("QPushButton { padding: 5px; border-radius: 3px; }")
+        forward_btn.clicked.connect(self.web_forward)
+        nav_layout.addWidget(forward_btn)
+
+        # Refresh button
+        refresh_btn = QPushButton("🔄 Refresh")
+        refresh_btn.setStyleSheet("QPushButton { padding: 5px; border-radius: 3px; }")
+        refresh_btn.clicked.connect(self.web_refresh)
+        nav_layout.addWidget(refresh_btn)
+
+        # URL bar
+        self.url_bar = QLineEdit()
+        self.url_bar.setPlaceholderText("Enter URL or search term...")
+        self.url_bar.setStyleSheet("""
+            QLineEdit {
+                padding: 5px;
+                border: 1px solid #BDC3C7;
+                border-radius: 3px;
+                background-color: #FFFFFF;
+            }
+        """)
+        self.url_bar.returnPressed.connect(self.web_navigate)
+        nav_layout.addWidget(self.url_bar)
+
+        # Go button
+        go_btn = QPushButton("Go")
+        go_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2E86AB;
+                color: white;
+                padding: 5px 10px;
+                border-radius: 3px;
+            }
+            QPushButton:hover {
+                background-color: #1F5F7A;
+            }
+        """)
+        go_btn.clicked.connect(self.web_navigate)
+        nav_layout.addWidget(go_btn)
+
+        nav_layout.addStretch()
+        web_layout.addLayout(nav_layout)
+
+        # WebEngine view
+        self.web_view = QWebEngineView()
+        self.web_view.setStyleSheet("""
+            QWebEngineView {
+                border: 1px solid #BDC3C7;
+                border-radius: 5px;
+            }
+        """)
+
+        # Set initial page (Google Images for reverse image search)
+        self.web_view.setUrl(QUrl("https://images.google.com/"))
+        self.url_bar.setText("https://images.google.com/")
+
+        # Connect URL change signal
+        self.web_view.urlChanged.connect(self.update_url_bar)
+        self.web_view.loadFinished.connect(self.web_load_finished)
+
+        web_layout.addWidget(self.web_view)
+
+        # Status bar for web view
+        self.web_status_label = QLabel("Ready")
+        self.web_status_label.setStyleSheet("QLabel { color: #95A5A6; font-style: italic; padding: 5px; }")
+        web_layout.addWidget(self.web_status_label)
+
+        return web_widget
+
+    def web_navigate(self):
+        """Navigate to URL entered in the address bar"""
+        if HAS_WEBENGINE and hasattr(self, 'web_view'):
+            url_text = self.url_bar.text().strip()
+
+            # If it's not a full URL, treat as search
+            if not url_text.startswith(('http://', 'https://')):
+                url_text = f"https://www.google.com/search?q={url_text.replace(' ', '+')}"
+
+            self.web_view.setUrl(QUrl(url_text))
+
+    def update_url_bar(self, url):
+        """Update the URL bar when navigation occurs"""
+        if HAS_WEBENGINE and hasattr(self, 'url_bar'):
+            self.url_bar.setText(url.toString())
+
+    def web_load_finished(self, success):
+        """Handle page load completion"""
+        if HAS_WEBENGINE and hasattr(self, 'web_status_label'):
+            if success:
+                self.web_status_label.setText("✅ Page loaded successfully")
+                self.web_status_label.setStyleSheet("QLabel { color: #27AE60; font-weight: bold; padding: 5px; }")
+            else:
+                self.web_status_label.setText("❌ Failed to load page")
+                self.web_status_label.setStyleSheet("QLabel { color: #E74C3C; font-weight: bold; padding: 5px; }")
+
+            # Reset style after 3 seconds
+            QTimer.singleShot(3000, lambda: self.web_status_label.setStyleSheet("QLabel { color: #95A5A6; font-style: italic; padding: 5px; }"))
+
+    def web_back(self):
+        """Go back in web history"""
+        if HAS_WEBENGINE and hasattr(self, 'web_view'):
+            self.web_view.back()
+
+    def web_forward(self):
+        """Go forward in web history"""
+        if HAS_WEBENGINE and hasattr(self, 'web_view'):
+            self.web_view.forward()
+
+    def web_refresh(self):
+        """Refresh current page"""
+        if HAS_WEBENGINE and hasattr(self, 'web_view'):
+            self.web_view.reload()
+
+    def open_web_search(self, url):
+        """Open URL in the web browser tab"""
+        if HAS_WEBENGINE and hasattr(self, 'web_view'):
+            self.web_view.setUrl(QUrl(url))
+            # Switch to web browser tab
+            for i in range(self.main_tab_widget.count()):
+                if self.main_tab_widget.tabText(i) == "🌐 Web Browser":
+                    self.main_tab_widget.setCurrentIndex(i)
+                    break
+
+    def create_internet_search_tab(self):
         """Create the internet image search tab"""
 
         internet_search_widget = QWidget()
@@ -1035,37 +1303,64 @@ class DeepFaceGUI(QMainWindow):
 
         search_layout = QVBoxLayout(search_group)
 
-        # Search button
+        # Search buttons container
+        search_buttons_layout = QHBoxLayout()
+        search_buttons_layout.setSpacing(10)
 
-        search_btn = QPushButton("🔍 Search for Matching Images")
-
+        # Selenium Search button
+        search_btn = QPushButton("🔍 Search with Selenium")
         search_btn.setStyleSheet("""
-
             QPushButton {
-
                 background-color: #E74C3C;
-
                 color: white;
-
                 padding: 10px;
-
                 border-radius: 5px;
-
                 font-weight: bold;
-
             }
-
             QPushButton:hover {
-
                 background-color: #C0392B;
-
             }
-
         """)
-
         search_btn.clicked.connect(self.perform_internet_search)
 
-        search_layout.addWidget(search_btn)
+        # Google Lens button (experimental)
+        lens_btn = QPushButton("🔍 Search with Google Lens (Experimental)")
+        lens_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #F39C12;
+                color: white;
+                padding: 10px;
+                border-radius: 5px;
+                font-weight: bold;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #E67E22;
+            }
+        """)
+        lens_btn.clicked.connect(self.perform_google_lens_search)
+
+        # Manual search button
+        manual_btn = QPushButton("🔍 Manual Search (Browser)")
+        manual_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #27AE60;
+                color: white;
+                padding: 10px;
+                border-radius: 5px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #1E8449;
+            }
+        """)
+        manual_btn.clicked.connect(self.open_manual_search)
+
+        # Add buttons to layout
+        search_buttons_layout.addWidget(search_btn)
+        search_buttons_layout.addWidget(lens_btn)
+        search_buttons_layout.addWidget(manual_btn)
+        search_layout.addLayout(search_buttons_layout)
 
         internet_search_layout.addWidget(search_group)
 
@@ -1135,7 +1430,50 @@ class DeepFaceGUI(QMainWindow):
 
         results_layout.addWidget(self.internet_thumbnails_scroll)
 
+        internet_search_layout.addWidget(results_group)
+
         return internet_search_widget
+
+    def open_manual_search(self):
+        """Open Google Images manually in browser"""
+        if not self.internet_image_path:
+            QMessageBox.warning(self, "Warning", "Please upload an image first.")
+            return
+
+        try:
+            # Clear previous results
+            self.clear_internet_results()
+
+            # Update results text
+            if hasattr(self, 'internet_results_text') and self.is_widget_valid(self.internet_results_text):
+                self.internet_results_text.append("🔍 Opening Google Images in the Web Browser tab...")
+                self.internet_results_text.append(f"Image: {os.path.basename(self.internet_image_path)}")
+                self.internet_results_text.append("\n📋 Manual Search Instructions:")
+                self.internet_results_text.append("1. Google Images is now open in the '🌐 Web Browser' tab")
+                self.internet_results_text.append("2. Click the camera icon (📷) in the search box")
+                self.internet_results_text.append("3. Select 'Upload an image' or drag & drop your image")
+                self.internet_results_text.append("4. Click 'Search by image' to see results")
+                self.internet_results_text.append("\n✅ All browsing happens within the application!")
+
+            # Open Google Images in web browser tab
+            self.open_web_search("https://images.google.com/")
+
+            # Also copy the image path to clipboard for easy access
+            try:
+                import pyperclip
+                pyperclip.copy(self.internet_image_path)
+                self.internet_results_text.append(f"\n📋 Image path copied to clipboard: {self.internet_image_path}")
+            except ImportError:
+                print("pyperclip not available - install with: pip install pyperclip")
+            except Exception as e:
+                print(f"Could not copy to clipboard: {e}")
+
+        except Exception as e:
+            error_msg = f"Error opening web search: {str(e)}"
+            print(error_msg)
+            if hasattr(self, 'internet_results_text') and self.is_widget_valid(self.internet_results_text):
+                self.internet_results_text.append(f"❌ {error_msg}")
+                self.internet_results_text.append("\n💡 Try opening https://images.google.com/ manually")
 
     def upload_internet_image(self):
         """Upload image for internet search"""
@@ -1187,8 +1525,9 @@ class DeepFaceGUI(QMainWindow):
                 self.internet_image_display.setPixmap(scaled_pixmap)
                 self.internet_image_display.setText("")
             else:
-                self._handle_image_error("❌ Invalid Image")
-                
+                if hasattr(self, 'internet_image_display'):
+                    self.internet_image_display.setText("❌ Invalid Image")
+
         except Exception as e:
             print(f"Error displaying image with QPixmap: {e}")
             self._try_pil_loading(file_path)
@@ -1229,38 +1568,162 @@ class DeepFaceGUI(QMainWindow):
             if hasattr(self, 'internet_image_display'):
                 self.internet_image_display.setText("❌ Error processing image")
 
+    def closeEvent(self, event):
+        """Check if a Qt widget is still valid and not deleted"""
+        try:
+            if widget is None:
+                return False
+
+            # Special handling for layouts
+            if hasattr(widget, 'count'):
+                # For layouts, just check if they have a parent or are the main layout
+                if hasattr(widget, 'parent') and widget.parent() is None:
+                    return False
+                return True
+
+            # For regular widgets
+            if hasattr(widget, 'isWidgetType') and widget.isWidgetType():
+                # Simple check: try to access objectName (this will raise RuntimeError if deleted)
+                widget.objectName()
+                return True
+
+            return False
+        except (RuntimeError, AttributeError):
+            return False
+
+    def closeEvent(self, event):
+        """Handle close event"""
+        self._is_closing = True
+        event.accept()
+
+    def perform_google_lens_search(self):
+        """Perform image search using Google Lens"""
+        if not HAS_GOOGLE_LENS:
+            QMessageBox.warning(self, "Feature Not Available",
+                             "Google Lens search is not available.\n\n"
+                             "This is an experimental feature that may not work reliably.\n\n"
+                             "Alternative options:\n"
+                             "• 'Manual Search (Browser)' - always works!\n"
+                             "• 'Search with Selenium' - automated search\n\n"
+                             "To enable Google Lens:\n"
+                             "pip install git+https://github.com/krishna2206/google-lens-python.git")
+            return
+            
+        if not hasattr(self, 'internet_image_path') or not self.internet_image_path:
+            QMessageBox.warning(self, "Warning", "Please upload an image first.")
+            return
+
+        try:
+            # Clear previous results
+            self.clear_internet_results()
+
+            # Ensure results text widget is available
+            if not hasattr(self, 'internet_results_text') or not self.is_widget_valid(self.internet_results_text):
+                print("Warning: Results text widget not available")
+                return
+
+            # Show searching message
+            self.internet_results_text.append("🔍 Searching with Google Lens...")
+            self.internet_results_text.append("This may take a few moments...")
+
+            # Create and start the worker thread
+            self.search_worker = self.SearchWorker(self.internet_image_path, timeout_seconds=30)
+            self.search_worker.finished.connect(self._handle_google_lens_results)
+            self.search_worker.start()
+
+        except Exception as e:
+            error_msg = f"Error starting Google Lens search: {str(e)}"
+            print(error_msg)
+            if hasattr(self, 'internet_results_text') and self.is_widget_valid(self.internet_results_text):
+                self.internet_results_text.append(f"❌ {error_msg}")
+                self.internet_results_text.append("\n💡 Alternative options:")
+                self.internet_results_text.append("• Use 'Manual Search (Browser)' - always works!")
+                self.internet_results_text.append("• Use 'Search with Selenium' - automated search")
+                self.internet_results_text.append("• Google Lens library may be outdated or incompatible")
+                self.internet_results_text.append(f"\n🔧 Try updating: pip install --upgrade git+https://github.com/krishna2206/google-lens-python.git")
+
+                # Also suggest running the diagnostic
+                self.internet_results_text.append(f"\n💡 Debug: Run 'python test_googlelens.py' to test GoogleLens separately")
+
+    def _handle_google_lens_results(self, result):
+        """Handle the results from Google Lens search"""
+        try:
+            if not hasattr(self, 'internet_results_text') or not self.is_widget_valid(self.internet_results_text):
+                return
+
+            if not result.get('success', False):
+                error_msg = result.get('error', 'Unknown error occurred')
+                self.internet_results_text.append(f"❌ Search failed: {error_msg}")
+                self.internet_results_text.append("\n💡 Don't worry! Try these alternatives:")
+                self.internet_results_text.append("• 'Manual Search (Browser)' - opens Google Images automatically")
+                self.internet_results_text.append("• 'Search with Selenium' - automated reverse image search")
+                self.internet_results_text.append("• Both methods work reliably and show full results!")
+                return
+
+            items = result.get('data', [])
+            if not items:
+                self.internet_results_text.append("❌ No results found by Google Lens")
+                self.internet_results_text.append("\n💡 This could mean:")
+                self.internet_results_text.append("• The Google Lens library returned empty results")
+                self.internet_results_text.append("• The image might be too unique or not publicly available")
+                self.internet_results_text.append("• Try the other search methods instead!")
+                return
+
+            self.internet_results_text.append(f"✅ Found {len(items)} results:\n")
+            
+            for idx, item in enumerate(items[:10], 1):  # Show top 10 results
+                title = item.get('title', 'No title')
+                url = item.get('url', '')
+                
+                # Create a clickable link
+                self.internet_results_text.append(f"{idx}. {title}")
+                if url:
+                    self.internet_results_text.append(f"   <a href='{url}'>{url}</a>")
+                self.internet_results_text.append("")
+                
+        except Exception as e:
+            error_msg = f"Error processing results: {str(e)}"
+            print(error_msg)
+            if hasattr(self, 'internet_results_text') and self.is_widget_valid(self.internet_results_text):
+                self.internet_results_text.append(f"❌ {error_msg}")
+
     def clear_internet_results(self):
         """Clear internet search results"""
+        # Don't proceed if the window is being closed
+        if hasattr(self, '_is_closing') and self._is_closing:
+            return
+
         try:
-            # Clear text results safely
-            if hasattr(self, 'internet_results_text') and self.internet_results_text is not None:
+            # Clear text results if available
+            if hasattr(self, 'internet_results_text'):
                 try:
-                    # Check if widget is still valid
-                    if self.internet_results_text.isWidgetType():
+                    if self.internet_results_text is not None and self.is_widget_valid(self.internet_results_text):
                         self.internet_results_text.clear()
                 except Exception as e:
                     print(f"Warning: Error clearing text results: {e}")
 
-            # Clear thumbnails - safely check if layout exists and has widgets
-            if hasattr(self, 'internet_thumbnails_layout') and self.internet_thumbnails_layout is not None:
+            # Clear thumbnails if available
+            if hasattr(self, 'internet_thumbnails_layout'):
                 try:
-                    # Check if layout is still valid
-                    if self.internet_thumbnails_layout.isWidgetType() or hasattr(self.internet_thumbnails_layout, 'count'):
-                        for i in reversed(range(self.internet_thumbnails_layout.count())):
-                            item = self.internet_thumbnails_layout.itemAt(i)
-                            if item and item.widget():
+                    layout = self.internet_thumbnails_layout
+                    if layout is not None and self.is_widget_valid(layout):
+                        # Remove all items from layout
+                        while layout.count() > 0:
+                            item = layout.takeAt(0)
+                            if item is not None:
                                 widget = item.widget()
-                                if widget and widget.isWidgetType():
+                                if widget is not None and self.is_widget_valid(widget):
                                     try:
                                         widget.setParent(None)
-                                    except Exception as e:
-                                        print(f"Warning: Error removing widget: {e}")
+                                        widget.deleteLater()
+                                    except RuntimeError:
+                                        pass  # Widget already deleted
                 except Exception as e:
-                    print(f"Warning: Error clearing thumbnails layout: {e}")
-
+                    if 'wrapped C/C++ object' not in str(e):
+                        print(f"Warning in clear_internet_results: {e}")
         except Exception as e:
-            print(f"Warning: Error clearing internet results: {e}")
-            # Continue execution even if clearing fails
+            if 'wrapped C/C++ object' not in str(e):
+                print(f"Unexpected error in clear_internet_results: {e}")
 
     def perform_internet_search(self):
         """Perform automated reverse image search using Selenium"""
@@ -1273,64 +1736,180 @@ class DeepFaceGUI(QMainWindow):
             self.clear_internet_results()
 
             # Ensure text widget exists and is still valid
-            if not hasattr(self, 'internet_results_text') or self.internet_results_text is None:
-                print("Warning: internet_results_text not available")
-                return
-
-            # Check if widget is still valid
-            try:
-                if not self.internet_results_text.isWidgetType():
-                    print("Warning: internet_results_text widget has been deleted")
-                    return
-            except Exception as e:
-                print(f"Warning: Cannot validate internet_results_text: {e}")
+            if not hasattr(self, 'internet_results_text') or not self.is_widget_valid(self.internet_results_text):
+                print("Warning: internet_results_text not available or invalid")
                 return
 
             self.internet_results_text.append("🔍 Starting automated reverse image search...")
             self.internet_results_text.append(f"Searching for: {os.path.basename(self.internet_image_path)}")
 
-            # Set up Chrome options
+            # Set up Chrome options for Windows compatibility
             chrome_options = Options()
-            chrome_options.add_argument("--headless")  # Run in background
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--disable-gpu")
             chrome_options.add_argument("--window-size=1920,1080")
+            chrome_options.add_argument("--disable-web-security")
+            chrome_options.add_argument("--allow-running-insecure-content")
+            chrome_options.add_argument("--disable-extensions")
+            chrome_options.add_argument("--disable-plugins")
+            chrome_options.add_argument("--disable-images")
+            chrome_options.add_argument("--disable-javascript")
+            chrome_options.add_argument("--disable-stylesheet")
+            chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+            chrome_options.add_experimental_option('useAutomationExtension', False)
 
-            # Initialize Chrome driver
-            driver = webdriver.Chrome(ChromeDriverManager().install(), options=chrome_options)
+            # Add debug mode option
+            debug_mode = False  # Set to True to see browser during development
+            if not debug_mode:
+                chrome_options.add_argument("--headless")
+
+            # Initialize Chrome driver with webdriver-manager
+            try:
+                print("Attempting to initialize Chrome driver with webdriver-manager...")
+                driver = webdriver.Chrome(ChromeDriverManager().install(), options=chrome_options)
+                print("✅ Chrome driver initialized successfully with webdriver-manager")
+            except Exception as e:
+                print(f"⚠️ webdriver-manager failed: {e}")
+                print("Attempting fallback to system Chrome...")
+                try:
+                    driver = webdriver.Chrome(options=chrome_options)
+                    print("✅ System Chrome driver initialized successfully")
+                except Exception as e2:
+                    print(f"❌ Both webdriver-manager and system Chrome failed: {e2}")
+                    raise Exception(f"Chrome driver initialization failed: {e2}")
 
             try:
                 # Navigate to Google Images
                 driver.get("https://images.google.com/")
 
-                # Find the camera/search by image button
-                camera_button = WebDriverWait(driver, 10).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, "[aria-label='Search by image']"))
-                )
+                # Try multiple selectors for the camera/search by image button
+                camera_selectors = [
+                    "[aria-label='Search by image']",
+                    "[aria-label*='image']",
+                    "[title*='Search by image']",
+                    "div[data-testid='camera-button']",
+                    "div[aria-label*='camera']",
+                    "[data-value='camera']",
+                    "g-camera-button",  # New Google Images selector
+                    ".camera-button",
+                    "[jsname='hSRGPd']"  # Alternative selector
+                ]
+
+                camera_button = None
+                for selector in camera_selectors:
+                    try:
+                        camera_button = WebDriverWait(driver, 5).until(
+                            EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                        )
+                        if camera_button:
+                            print(f"Found camera button with selector: {selector}")
+                            break
+                    except:
+                        continue
+
+                if not camera_button:
+                    raise Exception("Could not find camera/search by image button")
+
                 camera_button.click()
 
-                # Find the upload input and upload the image
-                upload_input = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.NAME, "encoded_image"))
-                )
+                # Wait for upload area to appear
+                upload_selectors = [
+                    "input[type='file']",
+                    "[name='encoded_image']",
+                    "input[accept*='image']",
+                    "[data-testid='file-input']"
+                ]
+
+                upload_input = None
+                for selector in upload_selectors:
+                    try:
+                        upload_input = WebDriverWait(driver, 5).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                        )
+                        if upload_input:
+                            print(f"Found upload input with selector: {selector}")
+                            break
+                    except:
+                        continue
+
+                if not upload_input:
+                    raise Exception("Could not find image upload input")
 
                 # Upload the image file
                 upload_input.send_keys(self.internet_image_path)
 
-                # Wait for search results
-                WebDriverWait(driver, 15).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, ".ivg-i"))
-                )
+                # Wait for search results - try multiple selectors
+                result_selectors = [
+                    ".ivg-i",  # Original selector
+                    ".rg_i",   # Alternative results selector
+                    "[data-src]",  # Images with data-src
+                    ".islrg img",  # Image search results
+                    "[jsname='hSRGPd'] img",  # New Google interface
+                    ".H8Rx8c img"  # Another possible selector
+                ]
 
-                # Extract search results
-                results = driver.find_elements(By.CSS_SELECTOR, ".ivg-i")
+                results_element = None
+                for selector in result_selectors:
+                    try:
+                        results_element = WebDriverWait(driver, 15).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                        )
+                        if results_element:
+                            print(f"Found results with selector: {selector}")
+                            break
+                    except:
+                        continue
+
+                if not results_element:
+                    # Try to find any image results
+                    try:
+                        results_element = WebDriverWait(driver, 10).until(
+                            EC.presence_of_element_located((By.TAG_NAME, "img"))
+                        )
+                        print("Found results by searching for any img tag")
+                    except:
+                        raise Exception("No search results found")
+
+                # Extract search results - try multiple approaches
+                results = []
+
+                # Try the original approach first
+                try:
+                    results = driver.find_elements(By.CSS_SELECTOR, ".ivg-i")
+                    if results:
+                        print(f"Found {len(results)} results with .ivg-i selector")
+                except:
+                    pass
+
+                # If no results, try alternative selectors
+                if not results:
+                    for selector in [".rg_i", ".islrg img", "[data-src]", ".H8Rx8c img"]:
+                        try:
+                            results = driver.find_elements(By.CSS_SELECTOR, selector)
+                            if results:
+                                print(f"Found {len(results)} results with {selector} selector")
+                                break
+                        except:
+                            continue
+
+                # If still no results, get all images as fallback
+                if not results:
+                    try:
+                        all_images = driver.find_elements(By.TAG_NAME, "img")
+                        # Filter out small images (likely icons) and get actual results
+                        results = [img for img in all_images if img.size['height'] > 50 and img.size['width'] > 50]
+                        print(f"Found {len(results)} image results using fallback method")
+                    except Exception as e:
+                        print(f"Fallback method failed: {e}")
 
                 if results:
                     # Check if widget is still valid before appending results
                     if hasattr(self, 'internet_results_text') and self.internet_results_text is not None:
                         try:
-                            if self.internet_results_text.isWidgetType():
+                            if self.is_widget_valid(self.internet_results_text):
                                 self.internet_results_text.append(f"✅ Found {len(results)} similar images!")
                                 self.internet_results_text.append("\n📸 Similar Images:")
                         except Exception as e:
@@ -1341,19 +1920,52 @@ class DeepFaceGUI(QMainWindow):
 
                     for i, result in enumerate(results[:10]):  # Show top 10 results
                         try:
-                            # Get image URL and description
-                            img_element = result.find_element(By.TAG_NAME, "img")
-                            img_url = img_element.get_attribute("src")
+                            # Extract image URL - try multiple approaches
+                            img_url = None
+                            description = f"Result {i+1}"
 
-                            # Get description if available
-                            description = result.get_attribute("aria-label") or "No description"
+                            # Try different methods to get image URL
+                            try:
+                                img_url = result.get_attribute("src")
+                                if not img_url or img_url.startswith("data:"):
+                                    img_url = result.get_attribute("data-src")
+                            except:
+                                pass
+
+                            # Try to find parent elements for more context
+                            if not img_url:
+                                try:
+                                    parent = result.find_element(By.XPATH, "..")
+                                    img_url = parent.get_attribute("href") or parent.get_attribute("data-src")
+                                except:
+                                    pass
+
+                            # Get description from various sources
+                            try:
+                                # Try alt text first
+                                description = result.get_attribute("alt") or result.get_attribute("title") or description
+
+                                # Try to find nearby text elements
+                                if not description or description == f"Result {i+1}":
+                                    try:
+                                        parent_div = result.find_element(By.XPATH, "../../..")
+                                        text_elements = parent_div.find_elements(By.TAG_NAME, "span")
+                                        for text_elem in text_elements:
+                                            text_content = text_elem.text.strip()
+                                            if text_content and len(text_content) > 3:
+                                                description = text_content
+                                                break
+                                    except:
+                                        pass
+                            except:
+                                pass
 
                             # Safely update text widget
                             if hasattr(self, 'internet_results_text') and self.internet_results_text is not None:
                                 try:
-                                    if self.internet_results_text.isWidgetType():
+                                    if self.is_widget_valid(self.internet_results_text):
                                         self.internet_results_text.append(f"\n{i+1}. {description}")
-                                        if img_url:
+                                        if img_url and not img_url.startswith("data:"):
                                             self.internet_results_text.append(f"   Image URL: {img_url}")
 
                                             # Create thumbnail display - safely check if layout exists
@@ -1369,7 +1981,7 @@ class DeepFaceGUI(QMainWindow):
                         except Exception as e:
                             if hasattr(self, 'internet_results_text') and self.internet_results_text is not None:
                                 try:
-                                    if self.internet_results_text.isWidgetType():
+                                    if self.is_widget_valid(self.internet_results_text):
                                         self.internet_results_text.append(f"\n{i+1}. Error extracting result: {str(e)}")
                                 except Exception as text_e:
                                     print(f"Warning: Cannot update error text: {text_e}")
@@ -1378,21 +1990,38 @@ class DeepFaceGUI(QMainWindow):
                     # Check if widget is still valid before showing no results message
                     if hasattr(self, 'internet_results_text') and self.internet_results_text is not None:
                         try:
-                            if self.internet_results_text.isWidgetType():
+                            if self.is_widget_valid(self.internet_results_text):
                                 self.internet_results_text.append("❌ No similar images found.")
+                                self.internet_results_text.append("💡 This could mean:")
+                                self.internet_results_text.append("• The image is too unique or not publicly available")
+                                self.internet_results_text.append("• Google's search by image feature couldn't match it")
+                                self.internet_results_text.append("• The image format or quality is not suitable")
                         except Exception as e:
                             print(f"Warning: Cannot update no results text: {e}")
 
             except Exception as e:
+                # Enhanced error reporting
+                error_msg = f"❌ Search failed: {str(e)}"
+                print(f"Selenium error details: {error_msg}")
+
                 # Check if widget is still valid before showing error message
                 if hasattr(self, 'internet_results_text') and self.internet_results_text is not None:
                     try:
-                        if self.internet_results_text.isWidgetType():
-                            self.internet_results_text.append(f"❌ Search failed: {str(e)}")
-                            self.internet_results_text.append("💡 Suggestions:")
-                            self.internet_results_text.append("• Try a different image")
-                            self.internet_results_text.append("• Check internet connection")
-                            self.internet_results_text.append("• Image might be too small or unclear")
+                        if self.is_widget_valid(self.internet_results_text):
+                            self.internet_results_text.append(error_msg)
+                            self.internet_results_text.append("\n💡 Troubleshooting suggestions:")
+                            self.internet_results_text.append("• Ensure you have a stable internet connection")
+                            self.internet_results_text.append("• Try a more common image (celebrity, landmark, etc.)")
+                            self.internet_results_text.append("• Check if Chrome browser is installed and updated")
+                            self.internet_results_text.append("• Verify that Google Images is accessible in your region")
+                            self.internet_results_text.append("• The reverse image search might be blocked or limited")
+
+                            # Check if it's a Chrome driver issue
+                            if "Chrome" in str(e) or "webdriver" in str(e).lower():
+                                self.internet_results_text.append("\n🔧 Chrome Driver Issues:")
+                                self.internet_results_text.append("• Install Chrome browser if not already installed")
+                                self.internet_results_text.append("• Update Chrome to the latest version")
+                                self.internet_results_text.append("• Try running: pip install webdriver-manager")
                     except Exception as text_e:
                         print(f"Warning: Cannot update error message: {text_e}")
                 else:
@@ -1404,9 +2033,14 @@ class DeepFaceGUI(QMainWindow):
         except Exception as e:
             if hasattr(self, 'internet_results_text') and self.internet_results_text is not None:
                 try:
-                    if self.internet_results_text.isWidgetType():
+                    if self.is_widget_valid(self.internet_results_text):
                         self.internet_results_text.append(f"❌ Failed to initialize search: {str(e)}")
-                        self.internet_results_text.append("💡 Try installing Chrome or check dependencies.")
+                        self.internet_results_text.append("\n🔧 Setup Troubleshooting:")
+                        self.internet_results_text.append("• Install Chrome browser: https://www.google.com/chrome/")
+                        self.internet_results_text.append("• Update ChromeDriver: pip install --upgrade webdriver-manager")
+                        self.internet_results_text.append("• Install Selenium: pip install selenium")
+                        self.internet_results_text.append("• Check if Google Images reverse search works manually")
+                        self.internet_results_text.append("• Try disabling VPN or proxy if using one")
                 except Exception as text_e:
                     print(f"Warning: Cannot update final error message: {text_e}")
             print(f"Error in perform_internet_search: {e}")
@@ -2274,10 +2908,6 @@ class DeepFaceGUI(QMainWindow):
 
     def clear_image_display(self):
         """Clear all image displays"""
-        self.img1_display.clear()
-        self.img2_display.clear()
-        self.image_display.clear()
-
         self.img1_display.setText("No Image\nLoaded")
         self.img1_display.setAlignment(Qt.AlignCenter)
         self.img1_display.setStyleSheet("""
@@ -2554,7 +3184,8 @@ class DeepFaceGUI(QMainWindow):
 
                          "• Internet Image Search\n\n"
                          "Built with PyQt5 and DeepFace\n"
-                         "Database powered by SQLite")
+                         "Database powered by SQLite\n"
+                         "Web browsing powered by PyQtWebEngine")
 
     # Analysis execution methods
     def execute_function(self):
@@ -2959,8 +3590,12 @@ class DeepFaceGUI(QMainWindow):
 if __name__ == '__main__':
     print("Launching GUI...")
 
+    # Initialize WebEngine before QApplication to avoid deprecation warning
+    if HAS_WEBENGINE:
+        QtWebEngine.initialize()
+
     # Final suppression during GUI startup
-    with SuppressStderr():
+    with contextlib.redirect_stderr(io.StringIO()):
         app = QApplication(sys.argv)
         window = DeepFaceGUI()
         window.show()

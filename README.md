@@ -19,15 +19,50 @@ A comprehensive face analysis application with SQLite database support for stori
 - **Data Export**: Export results and database to JSON format
 - **Search Functionality**: Find similar faces in the database
 
-### 🎨 Enhanced UI
-- **Modern Design**: Professional interface with styled components
-- **Responsive Layout**: Adaptive display modes for different operations
-- **Progress Indicators**: Visual feedback during processing
-- **Error Handling**: Comprehensive error display with suggestions
+### 🌐 Web Features
+- **In-App Web Browser**: Full-featured browser using PyQtWebEngine
+- **Internet Image Search**: Upload images and search the web for matches
+- **Google Images Integration**: Direct access to Google Images reverse search
+- **Google Lens Integration**: Advanced image search using Google Lens API
+- **Selenium Automation**: Automated reverse image search with Chrome
+- **Manual Search**: Copy image paths and open in web browser tab
 
-## Database Schema
+### 🔍 Internet Search Features
+- **Multiple Search Methods**: Selenium, Google Lens, and manual search options
+- **Real-time Results**: Live progress updates and detailed error messages
+- **Thumbnail Display**: Visual preview of search results
+- **URL Extraction**: Clickable links to found images
+- **Fallback Options**: Always provides alternative search methods
 
-### Tables
+### 🖥️ Interface Tabs
+
+#### 🔍 Analysis Tab
+- Original DeepFace functionality
+- Face verification and analysis
+- Dual image comparison display
+
+#### 🗄️ Database Tab
+- Database management and statistics
+- User management interface
+- Analysis history and gallery
+- Face search and comparison
+
+#### 🔍 Search Tab
+- Search for similar faces in database
+- Visual face comparison
+- Similarity threshold adjustment
+
+#### 🌐 Internet Search Tab
+- Upload images for web search
+- Multiple search method options
+- Real-time search results
+- Thumbnail previews
+
+#### 🌐 Web Browser Tab (WebEngine)
+- Full-featured in-app browser
+- Navigation controls (back, forward, refresh)
+- Address bar with search integration
+- Integrated with manual search functionality
 
 #### Users
 - Store user information and track their analyses
@@ -88,13 +123,25 @@ A comprehensive face analysis application with SQLite database support for stori
 
 #### Search Tab
 - Upload a face image
-- Find similar faces in database
-- Adjustable similarity thresholds
+- Find similar faces
 
-#### Settings Tab
-- Export entire database
-- Database optimization
-- Clear database (with confirmation)
+### Internet Search Usage
+
+1. **Switch to Internet Search Tab**: Click the "🌐 Internet Search" tab
+2. **Upload Image**: Click "📷 Upload Image" and select an image file
+3. **Choose Search Method**:
+   - **🔍 Search with Selenium**: Automated reverse image search (recommended)
+   - **🔍 Search with Google Lens**: Advanced AI-powered search (experimental)
+   - **🔍 Manual Search (Browser)**: Opens Google Images in the Web Browser tab
+4. **View Results**: Results appear with thumbnails and clickable links
+5. **Browse Results**: Use the Web Browser tab to visit found images
+
+### Web Browser Usage
+
+1. **Switch to Web Browser Tab**: Click the "🌐 Web Browser" tab (requires PyQtWebEngine)
+2. **Navigation**: Use back/forward buttons, address bar, and refresh
+3. **Search**: Enter search terms in the address bar (auto-converts to Google search)
+4. **Integration**: Manual search from Internet tab opens here automatically
 
 ## Installation
 
@@ -145,10 +192,24 @@ face/
 ## Dependencies
 
 - PyQt5: GUI framework
+- PyQtWebEngine: In-app web browsing (optional, enables Web Browser tab)
 - DeepFace: Face analysis library
 - SQLite3: Database (built-in Python module)
 - NumPy: Numerical computations
-- JSON: Data serialization
+- OpenCV: Image processing
+- Selenium: Web automation for internet search
+- WebDriver Manager: Automatic Chrome driver management
+- Google Lens Python: Advanced image search API
+
+## Optional Dependencies
+
+### PyQtWebEngine
+Enables the Web Browser tab for in-app browsing:
+```bash
+pip install PyQtWebEngine
+```
+
+If not installed, the Web Browser tab shows installation instructions.
 
 ## API Integration
 
@@ -162,6 +223,9 @@ The database system is designed to be easily extensible and can be integrated wi
 2. **Image Loading Issues**: Verify image formats (JPG, PNG supported)
 3. **Memory Issues**: Large databases can be optimized using the maintenance tools
 4. **Permission Errors**: Run as administrator if database creation fails
+5. **WebEngine Issues**: If Web Browser tab doesn't work, install PyQtWebEngine
+6. **Chrome Driver Issues**: Selenium search may require Chrome browser installation
+7. **Google Lens Issues**: Experimental feature may need API key or have rate limits
 
 ### Database Maintenance
 

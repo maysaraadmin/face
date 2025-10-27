@@ -1,5 +1,6 @@
 import sys
 import os
+import sqlite3
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QFileDialog, QTextEdit, QComboBox, QMessageBox,
                              QProgressBar, QFrame, QGroupBox, QSplitter, QTableWidget, QTableWidgetItem,
