@@ -36,6 +36,14 @@ import json
 import numpy as np
 from datetime import datetime
 import sqlite3
+import webbrowser
+import urllib.request
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 
 # Import PyQt5 components
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -87,6 +95,7 @@ class DeepFaceGUI(QMainWindow):
         # Variables for images
         self.img1_path = None
         self.img2_path = None
+        self.internet_image_path = None
 
         # Setup central widget and layout
         central_widget = QWidget()
@@ -972,6 +981,543 @@ class DeepFaceGUI(QMainWindow):
         search_layout.addWidget(results_group)
 
         self.main_tab_widget.addTab(search_widget, "🔍 Search")
+
+        self.main_tab_widget.addTab(self.create_internet_search_tab(), "🌐 Internet Search")
+
+    def create_internet_search_tab(self):
+
+        """Create the internet image search tab"""
+
+        internet_search_widget = QWidget()
+
+        internet_search_layout = QVBoxLayout(internet_search_widget)
+
+        # Upload section
+
+        upload_group = QGroupBox("Upload Image for Internet Search")
+
+        upload_group.setStyleSheet("QGroupBox { font-weight: bold; color: #2E86AB; }")
+
+        upload_layout = QVBoxLayout(upload_group)
+
+        # Image display area
+        self.internet_image_display = QLabel("No image uploaded")
+        self.internet_image_display.setAlignment(Qt.AlignCenter)
+        self.internet_image_display.setMinimumSize(250, 250)
+        self.internet_image_display.setStyleSheet("""
+            QLabel {
+                background-color: #F8F9FA;
+                border: 2px dashed #BDC3C7;
+                border-radius: 10px;
+                font-size: 14px;
+                color: #95A5A6;
+            }
+        """)
+        upload_layout.addWidget(self.internet_image_display)
+
+        # Upload button
+
+        upload_btn = QPushButton("📷 Upload Image")
+
+        upload_btn.setStyleSheet("QPushButton { background-color: #A8DADC; padding: 8px; border-radius: 5px; }")
+
+        upload_btn.clicked.connect(self.upload_internet_image)
+
+        upload_layout.addWidget(upload_btn)
+
+        internet_search_layout.addWidget(upload_group)
+
+        # Search section
+
+        search_group = QGroupBox("Search the Internet")
+
+        search_group.setStyleSheet("QGroupBox { font-weight: bold; color: #2E86AB; }")
+
+        search_layout = QVBoxLayout(search_group)
+
+        # Search button
+
+        search_btn = QPushButton("🔍 Search for Matching Images")
+
+        search_btn.setStyleSheet("""
+
+            QPushButton {
+
+                background-color: #E74C3C;
+
+                color: white;
+
+                padding: 10px;
+
+                border-radius: 5px;
+
+                font-weight: bold;
+
+            }
+
+            QPushButton:hover {
+
+                background-color: #C0392B;
+
+            }
+
+        """)
+
+        search_btn.clicked.connect(self.perform_internet_search)
+
+        search_layout.addWidget(search_btn)
+
+        internet_search_layout.addWidget(search_group)
+
+        # Results section
+
+        results_group = QGroupBox("Search Results")
+
+        results_group.setStyleSheet("QGroupBox { font-weight: bold; color: #2E86AB; }")
+
+        results_layout = QVBoxLayout(results_group)
+
+        # Results text area
+
+        self.internet_results_text = QTextEdit()
+
+        self.internet_results_text.setReadOnly(True)
+
+        self.internet_results_text.setStyleSheet("""
+
+            QTextEdit {
+
+                background-color: #F8F9FA;
+
+                border: 2px solid #2E86AB;
+
+                border-radius: 5px;
+
+                padding: 10px;
+
+            }
+
+        """)
+
+        results_layout.addWidget(self.internet_results_text)
+
+        # Scrollable area for image thumbnails
+
+        self.internet_thumbnails_scroll = QScrollArea()
+
+        self.internet_thumbnails_scroll.setWidgetResizable(True)
+
+        self.internet_thumbnails_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        self.internet_thumbnails_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        self.internet_thumbnails_scroll.setMaximumHeight(300)
+
+        self.internet_thumbnails_scroll.setStyleSheet("""
+
+            QScrollArea {
+
+                border: 1px solid #BDC3C7;
+
+                border-radius: 5px;
+
+            }
+
+        """)
+
+        self.internet_thumbnails_widget = QWidget()
+
+        self.internet_thumbnails_layout = QHBoxLayout(self.internet_thumbnails_widget)
+
+        self.internet_thumbnails_layout.setSpacing(10)
+
+        self.internet_thumbnails_scroll.setWidget(self.internet_thumbnails_widget)
+
+        results_layout.addWidget(self.internet_thumbnails_scroll)
+
+        return internet_search_widget
+
+    def upload_internet_image(self):
+        """Upload image for internet search"""
+        try:
+            options = QFileDialog.Options()
+            file_path, _ = QFileDialog.getOpenFileName(
+                self, "Upload Image for Search", "", "Images (*.png *.jpg *.jpeg *.bmp *.tiff)", options=options
+            )
+
+            if file_path:
+                self.internet_image_path = file_path
+
+                # Clear previous results
+                self.clear_internet_results()
+
+                # Ensure display widget exists
+                if not hasattr(self, 'internet_image_display') or self.internet_image_display is None:
+                    print("Warning: internet_image_display not available")
+                    return
+
+                # Ensure text widget exists
+                if not hasattr(self, 'internet_results_text') or self.internet_results_text is None:
+                    print("Warning: internet_results_text not available")
+                    return
+
+                # Ensure display widget is valid
+                try:
+                    # Test if widget is properly initialized
+                    current_text = self.internet_image_display.text()
+                except Exception as e:
+                    print(f"Error: internet_image_display not properly initialized: {e}")
+                    return
+
+                # Display the image
+                self._display_uploaded_image(file_path)
+
+        except Exception as e:
+            print(f"Error in upload_internet_image: {e}")
+            if hasattr(self, 'internet_results_text') and self.internet_results_text is not None:
+                self.internet_results_text.setText(f"Error uploading image: {str(e)}")
+
+    def _display_uploaded_image(self, file_path):
+        """Helper method to display uploaded image with error handling"""
+        try:
+            pixmap = QPixmap(file_path)
+
+            if not pixmap.isNull():
+                scaled_pixmap = pixmap.scaled(230, 230, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.internet_image_display.setPixmap(scaled_pixmap)
+                self.internet_image_display.setText("")
+            else:
+                self._handle_image_error("❌ Invalid Image")
+                
+        except Exception as e:
+            print(f"Error displaying image with QPixmap: {e}")
+            self._try_pil_loading(file_path)
+
+    def _try_pil_loading(self, file_path):
+        """Attempt to load image using PIL as fallback"""
+        try:
+            from PIL import Image
+            import io
+            import os
+
+            # Try loading with PIL first
+            pil_image = Image.open(file_path)
+            temp_path = "temp_display_image.png"
+            pil_image.save(temp_path)
+
+            try:
+                # Load with QPixmap
+                alt_pixmap = QPixmap(temp_path)
+                if not alt_pixmap.isNull():
+                    scaled_pixmap = alt_pixmap.scaled(230, 230, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    self.internet_image_display.setPixmap(scaled_pixmap)
+                    self.internet_image_display.setText("")
+                else:
+                    self.internet_image_display.setText("❌ Invalid Image")
+            except Exception as e:
+                print(f"Error loading image with QPixmap after PIL conversion: {e}")
+                self.internet_image_display.setText("❌ Error loading image")
+            finally:
+                # Clean up the temporary file
+                try:
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                except Exception as e:
+                    print(f"Error removing temporary file: {e}")
+        except Exception as e:
+            print(f"Error in PIL image processing: {e}")
+            if hasattr(self, 'internet_image_display'):
+                self.internet_image_display.setText("❌ Error processing image")
+
+    def clear_internet_results(self):
+        """Clear internet search results"""
+        try:
+            # Clear text results safely
+            if hasattr(self, 'internet_results_text') and self.internet_results_text is not None:
+                try:
+                    # Check if widget is still valid
+                    if self.internet_results_text.isWidgetType():
+                        self.internet_results_text.clear()
+                except Exception as e:
+                    print(f"Warning: Error clearing text results: {e}")
+
+            # Clear thumbnails - safely check if layout exists and has widgets
+            if hasattr(self, 'internet_thumbnails_layout') and self.internet_thumbnails_layout is not None:
+                try:
+                    # Check if layout is still valid
+                    if self.internet_thumbnails_layout.isWidgetType() or hasattr(self.internet_thumbnails_layout, 'count'):
+                        for i in reversed(range(self.internet_thumbnails_layout.count())):
+                            item = self.internet_thumbnails_layout.itemAt(i)
+                            if item and item.widget():
+                                widget = item.widget()
+                                if widget and widget.isWidgetType():
+                                    try:
+                                        widget.setParent(None)
+                                    except Exception as e:
+                                        print(f"Warning: Error removing widget: {e}")
+                except Exception as e:
+                    print(f"Warning: Error clearing thumbnails layout: {e}")
+
+        except Exception as e:
+            print(f"Warning: Error clearing internet results: {e}")
+            # Continue execution even if clearing fails
+
+    def perform_internet_search(self):
+        """Perform automated reverse image search using Selenium"""
+        if not self.internet_image_path:
+            QMessageBox.warning(self, "Warning", "Please upload an image first.")
+            return
+
+        try:
+            # Clear previous results
+            self.clear_internet_results()
+
+            # Ensure text widget exists and is still valid
+            if not hasattr(self, 'internet_results_text') or self.internet_results_text is None:
+                print("Warning: internet_results_text not available")
+                return
+
+            # Check if widget is still valid
+            try:
+                if not self.internet_results_text.isWidgetType():
+                    print("Warning: internet_results_text widget has been deleted")
+                    return
+            except Exception as e:
+                print(f"Warning: Cannot validate internet_results_text: {e}")
+                return
+
+            self.internet_results_text.append("🔍 Starting automated reverse image search...")
+            self.internet_results_text.append(f"Searching for: {os.path.basename(self.internet_image_path)}")
+
+            # Set up Chrome options
+            chrome_options = Options()
+            chrome_options.add_argument("--headless")  # Run in background
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--window-size=1920,1080")
+
+            # Initialize Chrome driver
+            driver = webdriver.Chrome(ChromeDriverManager().install(), options=chrome_options)
+
+            try:
+                # Navigate to Google Images
+                driver.get("https://images.google.com/")
+
+                # Find the camera/search by image button
+                camera_button = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, "[aria-label='Search by image']"))
+                )
+                camera_button.click()
+
+                # Find the upload input and upload the image
+                upload_input = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.NAME, "encoded_image"))
+                )
+
+                # Upload the image file
+                upload_input.send_keys(self.internet_image_path)
+
+                # Wait for search results
+                WebDriverWait(driver, 15).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, ".ivg-i"))
+                )
+
+                # Extract search results
+                results = driver.find_elements(By.CSS_SELECTOR, ".ivg-i")
+
+                if results:
+                    # Check if widget is still valid before appending results
+                    if hasattr(self, 'internet_results_text') and self.internet_results_text is not None:
+                        try:
+                            if self.internet_results_text.isWidgetType():
+                                self.internet_results_text.append(f"✅ Found {len(results)} similar images!")
+                                self.internet_results_text.append("\n📸 Similar Images:")
+                        except Exception as e:
+                            print(f"Warning: Cannot update results text: {e}")
+                    else:
+                        print("Warning: internet_results_text not available for results update")
+                        return
+
+                    for i, result in enumerate(results[:10]):  # Show top 10 results
+                        try:
+                            # Get image URL and description
+                            img_element = result.find_element(By.TAG_NAME, "img")
+                            img_url = img_element.get_attribute("src")
+
+                            # Get description if available
+                            description = result.get_attribute("aria-label") or "No description"
+
+                            # Safely update text widget
+                            if hasattr(self, 'internet_results_text') and self.internet_results_text is not None:
+                                try:
+                                    if self.internet_results_text.isWidgetType():
+                                        self.internet_results_text.append(f"\n{i+1}. {description}")
+                                        if img_url:
+                                            self.internet_results_text.append(f"   Image URL: {img_url}")
+
+                                            # Create thumbnail display - safely check if layout exists
+                                            if hasattr(self, 'internet_thumbnails_layout') and self.internet_thumbnails_layout is not None:
+                                                try:
+                                                    if hasattr(self.internet_thumbnails_layout, 'count'):
+                                                        self.create_thumbnail_display(img_url, description, i+1)
+                                                except Exception as e:
+                                                    print(f"Warning: Cannot create thumbnail: {e}")
+                                except Exception as e:
+                                    print(f"Warning: Cannot update text widget: {e}")
+
+                        except Exception as e:
+                            if hasattr(self, 'internet_results_text') and self.internet_results_text is not None:
+                                try:
+                                    if self.internet_results_text.isWidgetType():
+                                        self.internet_results_text.append(f"\n{i+1}. Error extracting result: {str(e)}")
+                                except Exception as text_e:
+                                    print(f"Warning: Cannot update error text: {text_e}")
+
+                else:
+                    # Check if widget is still valid before showing no results message
+                    if hasattr(self, 'internet_results_text') and self.internet_results_text is not None:
+                        try:
+                            if self.internet_results_text.isWidgetType():
+                                self.internet_results_text.append("❌ No similar images found.")
+                        except Exception as e:
+                            print(f"Warning: Cannot update no results text: {e}")
+
+            except Exception as e:
+                # Check if widget is still valid before showing error message
+                if hasattr(self, 'internet_results_text') and self.internet_results_text is not None:
+                    try:
+                        if self.internet_results_text.isWidgetType():
+                            self.internet_results_text.append(f"❌ Search failed: {str(e)}")
+                            self.internet_results_text.append("💡 Suggestions:")
+                            self.internet_results_text.append("• Try a different image")
+                            self.internet_results_text.append("• Check internet connection")
+                            self.internet_results_text.append("• Image might be too small or unclear")
+                    except Exception as text_e:
+                        print(f"Warning: Cannot update error message: {text_e}")
+                else:
+                    print(f"Cannot display error message: internet_results_text not available")
+
+            finally:
+                driver.quit()
+
+        except Exception as e:
+            if hasattr(self, 'internet_results_text') and self.internet_results_text is not None:
+                try:
+                    if self.internet_results_text.isWidgetType():
+                        self.internet_results_text.append(f"❌ Failed to initialize search: {str(e)}")
+                        self.internet_results_text.append("💡 Try installing Chrome or check dependencies.")
+                except Exception as text_e:
+                    print(f"Warning: Cannot update final error message: {text_e}")
+            print(f"Error in perform_internet_search: {e}")
+
+    def create_thumbnail_display(self, img_url, description, index):
+        """Create a clickable thumbnail for search results"""
+        try:
+            # Create thumbnail widget
+            thumbnail_frame = QFrame()
+            thumbnail_frame.setFrameStyle(QFrame.Box)
+            thumbnail_frame.setStyleSheet("""
+                QFrame {
+                    border: 2px solid #BDC3C7;
+                    border-radius: 5px;
+                    background-color: #F8F9FA;
+                }
+                QFrame:hover {
+                    border: 2px solid #2E86AB;
+                    background-color: #E8F4F8;
+                }
+            """)
+            thumbnail_frame.setFixedSize(150, 180)
+            thumbnail_frame.setCursor(Qt.PointingHandCursor)
+
+            # Layout for thumbnail
+            thumb_layout = QVBoxLayout(thumbnail_frame)
+            thumb_layout.setSpacing(5)
+            thumb_layout.setContentsMargins(5, 5, 5, 5)
+
+            # Image display
+            image_label = QLabel()
+            image_label.setAlignment(Qt.AlignCenter)
+            image_label.setMinimumSize(120, 120)
+            image_label.setMaximumSize(120, 120)
+            image_label.setStyleSheet("""
+                QLabel {
+                    background-color: #FFFFFF;
+                    border: 1px solid #BDC3C7;
+                    border-radius: 3px;
+                }
+            """)
+
+            # Download and display thumbnail with better error handling
+            try:
+                # Simple approach: use urllib to download and save image
+                req = urllib.request.Request(img_url)
+                with urllib.request.urlopen(req) as response:
+                    image_data = response.read()
+
+                # Save to temporary file and load with QPixmap
+                temp_filename = f"temp_thumbnail_{index}.jpg"
+                with open(temp_filename, 'wb') as f:
+                    f.write(image_data)
+
+                # Load with QPixmap
+                pixmap = QPixmap(temp_filename)
+                if not pixmap.isNull():
+                    scaled_pixmap = pixmap.scaled(110, 110, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    image_label.setPixmap(scaled_pixmap)
+                else:
+                    image_label.setText("❌\nInvalid\nImage")
+
+                # Clean up temp file
+                if os.path.exists(temp_filename):
+                    os.remove(temp_filename)
+
+            except Exception as img_error:
+                print(f"Error loading thumbnail image: {img_error}")
+                image_label.setText("⚠️\nLoad\nError")
+
+            thumb_layout.addWidget(image_label)
+
+            # Description
+            desc_label = QLabel(description[:50] + "..." if len(description) > 50 else description)
+            desc_label.setStyleSheet("""
+                QLabel {
+                    font-size: 10px;
+                    color: #2C3E50;
+                    text-align: center;
+                }
+            """)
+            desc_label.setWordWrap(True)
+            thumb_layout.addWidget(desc_label)
+
+            # Click handler
+            def open_full_image():
+                try:
+                    webbrowser.open(img_url)
+                except Exception as e:
+                    print(f"Error opening image URL: {e}")
+
+            thumbnail_frame.mousePressEvent = lambda event: open_full_image()
+
+            # Store URL for reference
+            thumbnail_frame.setProperty("image_url", img_url)
+
+            # Safely add to layout
+            if hasattr(self, 'internet_thumbnails_layout') and self.internet_thumbnails_layout is not None:
+                try:
+                    # Check if layout is still valid
+                    if hasattr(self.internet_thumbnails_layout, 'addWidget'):
+                        self.internet_thumbnails_layout.addWidget(thumbnail_frame)
+                    else:
+                        print("Warning: internet_thumbnails_layout not valid for adding widgets")
+                except Exception as e:
+                    print(f"Warning: Cannot add thumbnail to layout: {e}")
+            else:
+                print("Warning: internet_thumbnails_layout not available")
+
+        except Exception as e:
+            print(f"Error creating thumbnail: {e}")
 
     # Search functionality methods
     def select_search_image(self):
@@ -2004,7 +2550,9 @@ class DeepFaceGUI(QMainWindow):
                          "• Database Management\n"
                          "• Progress Tracking\n"
                          "• Rich Result Display\n"
-                         "• Dual Image Display\n\n"
+                         "• Dual Image Display\n"
+
+                         "• Internet Image Search\n\n"
                          "Built with PyQt5 and DeepFace\n"
                          "Database powered by SQLite")
 
@@ -2230,10 +2778,17 @@ class DeepFaceGUI(QMainWindow):
         """Clear all displays and reset state"""
         self.img1_path = None
         self.img2_path = None
+        self.internet_image_path = None
         self.img1_label.setText('Image 1: None')
         self.img2_label.setText('Image 2: None')
         self.clear_image_display()
         self.clear_results()
+        # Clear internet search results safely - only if widgets exist
+        try:
+            if hasattr(self, 'clear_internet_results'):
+                self.clear_internet_results()
+        except Exception as e:
+            print(f"Warning: Could not clear internet results: {e}")
         self.switch_to_single_display()
         self.update_display_mode()
 

@@ -8,3 +8,6 @@ opencv-python==4.8.1.78
 pillow==10.0.1
 retina-face==0.0.13
 mtcnn==0.1.1
+selenium==4.15.0
+webdriver-manager==4.0.1
+Pillow==10.0.1
